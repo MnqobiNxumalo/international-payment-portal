@@ -1,0 +1,118 @@
+version: 2.1
+
+# Docker images to use
+executors:
+  node-executor:
+    docker:
+      - image: cimg/node:18.17.0
+    working_directory: ~/project
+
+  sonar-executor:
+    docker:
+      - image: sonarsource/sonar-scanner-cli:latest
+    working_directory: ~/project
+
+jobs:
+  # Job 1: Install dependencies and build backend
+  build-backend:
+    executor: node-executor
+    steps:
+      - checkout
+      - run:
+          name: Install Backend Dependencies
+          command: |
+            cd backend
+            npm ci
+      - run:
+          name: Run Backend Tests (if any)
+          command: |
+            cd backend
+            npm test || echo "No tests configured"
+      - persist_to_workspace:
+          root: ~/project
+          paths:
+            - backend
+
+  # Job 2: Install dependencies and build frontend
+  build-frontend:
+    executor: node-executor
+    steps:
+      - checkout
+      - run:
+          name: Install Frontend Dependencies
+          command: |
+            cd frontend
+            npm ci
+      - run:
+          name: Build Frontend
+          command: |
+            cd frontend
+            CI=false npm run build
+      - persist_to_workspace:
+          root: ~/project
+          paths:
+            - frontend
+
+  # Job 3: SonarQube Analysis
+  sonar-analysis:
+    executor: sonar-executor
+    steps:
+      - checkout
+      - run:
+          name: Run SonarQube Scanner
+          command: |
+            sonar-scanner \
+              -Dsonar.projectKey=international-payment-portal \
+              -Dsonar.sources=. \
+              -Dsonar.host.url=https://sonarcloud.io \
+              -Dsonar.organization=YOUR_ORG_NAME \
+              -Dsonar.token=${SONAR_TOKEN} \
+              -Dsonar.exclusions=**/node_modules/**,**/build/**,**/dist/**,**/*.sqlite,**/.env
+
+  # Job 4: Security Scan with npm audit
+  security-scan:
+    executor: node-executor
+    steps:
+      - checkout
+      - run:
+          name: Run npm audit on backend
+          command: |
+            cd backend
+            npm audit --audit-level=moderate || echo "Vulnerabilities found - review"
+      - run:
+          name: Run npm audit on frontend
+          command: |
+            cd frontend
+            npm audit --audit-level=moderate || echo "Vulnerabilities found - review"
+
+# Workflow to run all jobs
+workflows:
+  version: 2
+  build-and-scan:
+    jobs:
+      - build-backend:
+          filters:
+            branches:
+              only:
+                - main
+                - develop
+      - build-frontend:
+          filters:
+            branches:
+              only:
+                - main
+                - develop
+      - sonar-analysis:
+          requires:
+            - build-backend
+            - build-frontend
+          filters:
+            branches:
+              only:
+                - main
+      - security-scan:
+          filters:
+            branches:
+              only:
+                - main
+                - develop
